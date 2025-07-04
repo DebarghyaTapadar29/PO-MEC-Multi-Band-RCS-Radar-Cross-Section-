@@ -23,7 +23,7 @@ clear; clc; close all;
 
 %% =================== 1. USER CONFIGURATION PANEL =====================
 % --- Input File and Geometry ---
-stl_file = 'Your Stl File.stl';  % The name of your 3D model file
+stl_file = 'BALI-FGHT.stl';  % The name of your 3D model file
 scale_factor = 0.001;          % Use 0.001 if model is in mm, 1.0 if in m
 
 % --- Core Simulation Parameters ---
@@ -53,7 +53,11 @@ fprintf('--- Initializing Full-Fledged RCS Analysis v3.1 ---\n');
 fprintf('1. Loading and pre-processing geometry...\n');
 tic_setup = tic;
 
-TR = stlread(stl_file);
+try
+    TR = stlread(stl_file);
+catch ME
+    error('Error reading STL file: %s\nMake sure the file exists and is a valid STL file.', ME.message);
+end
 faces = TR.ConnectivityList;
 vertices = TR.Points * scale_factor;
 
@@ -92,6 +96,9 @@ end
 
 h_sim_waitbar = waitbar(0, 'Starting simulation...', 'Name', 'RCS Sweep Progress');
 
+% Pre-allocate a cell array to store RCS contributions per face and band
+face_rcs_contributions = cell(length(bands), 1);
+
 for i_band = 1:length(bands)
     waitbar_msg = sprintf('Simulating Band %d/%d: %s', i_band, length(bands), bands(i_band).name);
     waitbar(i_band / length(bands), h_sim_waitbar, waitbar_msg);
@@ -101,7 +108,9 @@ for i_band = 1:length(bands)
     lambda = physconst('LightSpeed') / bands(i_band).freq;
     k = 2 * pi / lambda;
     
-    E_scat_po = calculate_po_sweep_vec(k, k_inc_dirs, k_scat_dirs, e_inc_pols, faces, vertices, face_normals, face_areas, eta_ram);
+    % Store the total scattered field and face RCS contributions
+    [E_scat_po, face_rcs] = calculate_po_sweep_vec(k, k_inc_dirs, k_scat_dirs, e_inc_pols, faces, vertices, face_normals, face_areas, eta_ram);
+    face_rcs_contributions{i_band} = face_rcs; % Store face RCS contribution for this band
     
     if enable_MEC
         E_scat_mec = calculate_mec_sweep_vec(k, k_inc_dirs, k_scat_dirs, vertices, unique_edges);
@@ -169,12 +178,17 @@ for i = 1:length(bands)
 end
 fprintf('========================================================================================\n\n');
 
-num_viz_tasks = 2;
+num_viz_tasks = 3;
 h_viz_waitbar = waitbar(0, 'Initializing...', 'Name', 'Generating Visualizations');
 waitbar(0/num_viz_tasks, h_viz_waitbar, 'Generating Simplified Heatmap...');
 create_simplified_heatmap(azimuth_angles_deg, bands, rcs_matrix);
 waitbar(1/num_viz_tasks, h_viz_waitbar, 'Generating Polar & Cartesian Plots...');
 create_2d_plots(deg2rad(azimuth_angles_deg), bands);
+
+% --- 3D Heatmap Visualization ---
+waitbar(2/num_viz_tasks, h_viz_waitbar, 'Generating 3D Heatmap...');
+create_3d_heatmap(TR, vertices, faces, face_rcs_contributions, bands);
+
 waitbar(1, h_viz_waitbar, 'Complete.');
 close(h_viz_waitbar);
 fprintf('   ...Report and visualizations generated in %.4f seconds.\n', toc(tic_report_viz));
@@ -208,13 +222,57 @@ function create_2d_plots(angles_rad, bands)
     legend('show', 'Location', 'southoutside', 'NumColumns', 3);
 end
 
+function create_3d_heatmap(TR, vertices, faces, face_rcs_contributions, bands)
+    % Calculate average RCS contribution across all bands and angles for each face
+    num_faces = size(faces, 1);
+    avg_rcs_per_face = zeros(num_faces, 1);
+    for i_band = 1:length(bands)
+        avg_rcs_per_face = avg_rcs_per_face + mean(face_rcs_contributions{i_band}, 2); % Average across angles
+    end
+    avg_rcs_per_face = avg_rcs_per_face / length(bands); % Average across bands
+    
+    figure('Name', '3D RCS Heatmap', 'Position', [100, 100, 800, 600]);
+    
+    % Use a colormap for the RCS values
+    colormap(jet(256));
+    
+    % Normalize RCS values to the range [0, 1] for colormap indexing
+    min_rcs = min(avg_rcs_per_face);
+    max_rcs = max(avg_rcs_per_face);
+
+    % Handle the case where min_rcs == max_rcs to avoid division by zero
+    if min_rcs == max_rcs
+        normalized_rcs = zeros(size(avg_rcs_per_face)); % All faces same color
+    else
+        normalized_rcs = (avg_rcs_per_face - min_rcs) / (max_rcs - min_rcs);
+    end
+    
+    % The critical change is here: Use FaceColor and give a color PER FACE, not per vertex
+    patch('Faces', faces, 'Vertices', vertices, 'FaceVertexCData', normalized_rcs, ...
+          'FaceColor', 'flat', 'EdgeColor', 'none');  % 'flat' FaceColor
+    
+    % Add a colorbar
+    h = colorbar;
+    ylabel(h, 'Normalized Average RCS Contribution');
+    caxis([0 1]); % Set color axis limits
+    
+    title('3D RCS Heatmap of Model (Average Across Bands and Angles)');
+    xlabel('X (m)'); ylabel('Y (m)'); zlabel('Z (m)');
+    axis equal; view(3); grid on;
+    camlight; lighting gouraud;
+end
+
+
 % --- ROBUST PHYSICAL OPTICS FUNCTION (v3.1) ---
-function E_scat = calculate_po_sweep_vec(k, k_inc_dirs, k_scat_dirs, e_inc_pols, faces, vertices, normals, face_areas, eta)
+function [E_scat, face_rcs] = calculate_po_sweep_vec(k, k_inc_dirs, k_scat_dirs, e_inc_pols, faces, vertices, normals, face_areas, eta)
     num_angles = size(k_inc_dirs, 2);
     E_scat_total_per_angle = complex(zeros(3, num_angles));
 
     p1_all = vertices(faces(:,1),:); p2_all = vertices(faces(:,2),:); p3_all = vertices(faces(:,3),:);
     face_centroids = (p1_all + p2_all + p3_all) / 3;
+    
+    % Pre-allocate face RCS contributions matrix
+    face_rcs = zeros(size(faces, 1), num_angles);
 
     for i = 1:size(faces, 1)
         dot_prod_illumination = normals(i, :) * k_inc_dirs;
@@ -279,9 +337,14 @@ function E_scat = calculate_po_sweep_vec(k, k_inc_dirs, k_scat_dirs, e_inc_pols,
         E_contrib = pre_factor .* I .* cross(k_scat_subset, cross(E_refl, k_scat_subset));
         
         E_scat_total_per_angle(:, is_illuminated_mask) = E_scat_total_per_angle(:, is_illuminated_mask) + E_contrib;
+        
+        % Store RCS contribution for this face
+        rcs_linear = 4 * pi * sum(abs(E_contrib).^2, 1);
+        face_rcs(i, is_illuminated_mask) = 10 * log10(rcs_linear + 1e-12); % Store in dBsm
     end
     E_scat = E_scat_total_per_angle;
 end
+
 
 % --- METHOD OF EDGE CURRENTS FUNCTION ---
 function E_scat = calculate_mec_sweep_vec(k, k_inc_dirs, k_scat_dirs, vertices, edges)
