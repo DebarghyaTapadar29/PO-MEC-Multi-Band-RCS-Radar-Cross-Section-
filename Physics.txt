@@ -1,0 +1,94 @@
+This document details the electromagnetic scattering models and physical principles implemented in the `run_RCS_Analysis_Final.m` MATLAB script and its helper functions. This tool is designed to perform computationally efficient Radar Cross Section (RCS) analysis of 3D geometries (imported via STL files) across different radar bands and viewing angles. It utilizes high-frequency asymptotic techniques, specifically Physical Optics (PO) and the Method of Edge Currents (MEC), which are faster than full-wave methods for electrically large objects.
+
+## 1. Overall Approach: Surface & Edge Scattering
+
+The tool's core approach is based on decomposing the total scattered field into contributions from illuminated surfaces and illuminated edges:
+
+1.  The 3D geometry is discretized into small triangular faces and extracted edges.
+2.  The scattered electric field ($\vec{E}_s$) from illuminated faces is calculated using the **Physical Optics (PO)** approximation.
+3.  *(If enabled)* The scattered electric field ($\vec{E}_s$) from illuminated edges is calculated using a simplified **Method of Edge Currents (MEC)** approach.
+4.  The total scattered field is the sum of the PO and MEC contributions: $\vec{E}_{s, total} = \vec{E}_{s, PO} + \vec{E}_{s, MEC}$.
+5.  The monostatic Radar Cross Section ($\sigma$) is calculated from the magnitude of the total scattered field in the far field.
+
+The analysis is performed for defined incidence/scattering directions (assuming monostatic RCS, where the receiver is at the same location as the transmitter, so the scattered direction is the negative of the incident direction) and considering specified polarization states and material properties.
+
+## 2. Detailed Electromagnetic Models Implemented
+
+### 2.1 Physical Optics (PO) for Surface Scattering
+
+Physical Optics is a high-frequency approximation based on assuming that the induced surface current on the illuminated side of a conducting body is the same as that induced on an infinite tangent plane, and zero on the shadowed side. The far-field scattered electric field from a surface $S$ is given by the integral:
+
+$\vec{E}_s^{PO} \approx \frac{j k Z_0}{4 \pi R} e^{-j k R} \int_{S_{illum}} [(\hat{k}_s \cdot \vec{J}_s) \hat{k}_s - \vec{J}_s] e^{j k \hat{k}_s \cdot \vec{r}'} dS'$
+
+Where:
+*   $k = 2\pi / \lambda$ is the wavenumber.
+*   $Z_0$ is the impedance of free space.
+*   $R$ is the distance to the observation point in the far field.
+*   $\hat{k}_s$ is the unit vector in the scattering direction (for monostatic RCS, $\hat{k}_s = -\hat{k}_i$).
+*   $\vec{r}'$ is the position vector to a point on the surface $S$.
+*   $\vec{J}_s$ is the induced surface current density.
+
+The surface current $\vec{J}_s$ on the illuminated side is approximated as $\vec{J}_s \approx 2 \hat{n} \times \vec{H}_i$, where $\hat{n}$ is the surface normal and $\vec{H}_i$ is the incident magnetic field. Using $\vec{H}_i = \frac{1}{Z_0} \hat{k}_i \times \vec{E}_i$, this leads to $\vec{J}_s \approx \frac{2}{Z_0} \hat{n} \times (\hat{k}_i \times \vec{E}_i)$.
+
+The code calculates the contribution from each triangular face by approximating the integral over the face area. This is done by evaluating the integral using the phase center at the face centroid and applying a sinc correction term (Gordon's method or similar) that accounts for the finite size and orientation of the flat panel.
+
+*   **Illumination Check:** A face is considered illuminated if the dot product of its normal vector ($\hat{n}$) and the incident wave vector ($\hat{k}_i$) is negative ($\hat{n} \cdot \hat{k}_i < 0$). This assumes that objects cast geometric shadows.
+*   **Reflection Coefficients & Material ($\eta$):** The magnitude and phase of the induced current, and thus the scattered field, depend on the material properties. The code uses a surface impedance $\eta$ relative to the free-space impedance ($Z_s / Z_0$).
+    *   For a **Perfect Electric Conductor (PEC)**, $\eta = 0$. The tangential electric field on the surface is zero. The reflection coefficients for perpendicular ($R_h$) and parallel ($R_v$) polarization are $R_h = 1$ and $R_v = -1$.
+    *   For a simple **Radar Absorbent Material (RAM)** modeled as a resistive sheet or a simple coating, $\eta$ can be a complex value ($\eta = R + jX$). The reflection coefficients are calculated based on the angle of incidence ($\theta_i$) and $\eta$:
+        $R_v = \frac{\eta \cos \theta_i - 1}{\eta \cos \theta_i + 1}$
+        $R_h = \frac{\cos \theta_i - \eta}{\cos \theta_i + \eta}$
+        The code calculates the reflected electric field vector using these polarization-dependent reflection coefficients applied to the components of the incident field parallel and perpendicular to the plane of incidence (defined by $\hat{k}_i$ and $\hat{n}$).
+*   **NaN Fix for Normal Incidence:** A key robust feature (v3.1) handles the special case when the incident wave is normal to a face ($\hat{k}_i \approx -\hat{n}$). In this case, the plane of incidence is undefined, and standard formulas for parallel/perpendicular components break down, potentially causing division by zero or `NaN`. The code detects this ($\|\hat{k}_i \times \hat{n}\| \approx 0$) and applies the simplified normal reflection coefficient $R = (\eta - 1) / (\eta + 1)$, which is valid for both polarizations at normal incidence.
+
+### 2.2 Method of Edge Currents (MEC)
+
+Physical Optics assumes currents only exist on illuminated surfaces and stop abruptly at the shadow boundary. This causes inaccuracies and ignores diffraction, especially from sharp edges. The Method of Edge Currents (MEC) (often related to methods like the Uniform Theory of Diffraction - UTD) provides a correction for the scattered field originating from illuminated edges.
+
+*   The code implements a simplified MEC formulation. It integrates a current along each edge. The contribution from each edge depends on its length, orientation relative to the incident and scattered directions, and empirical diffraction coefficients (represented conceptually by $D_s$ and $D_h$ in the code, though their specific form in this implementation is simplified).
+*   The core idea is to add scattered fields from edges that are "optically visible" from both the source and the observation point. The code doesn't explicitly check for visibility/blockage by other parts of the geometry; it likely includes contributions from all unique edges found during preprocessing.
+*   The `mec_scaling_factor` allows empirical adjustment of the MEC contribution's magnitude, as simplified MEC can sometimes overestimate or underestimate the effect.
+
+### 2.3 Polarization (VV/HH)
+
+The code supports two standard polarization states for the incident electric field:
+
+*   **VV Polarization (Vertical-Vertical):** The incident electric field vector ($\vec{E}_i$) is perpendicular to the plane defined by the incident direction ($\hat{k}_i$) and the horizontal (XY) plane. For a sweep at constant elevation (typically 0), this means $\vec{E}_i$ is primarily in the Z direction.
+*   **HH Polarization (Horizontal-Horizontal):** The incident electric field vector ($\vec{E}_i$) is parallel to the horizontal (XY) plane and perpendicular to the incident direction ($\hat{k}_i$). For a sweep at constant elevation (typically 0), this means $\vec{E}_i$ is in the XY plane, perpendicular to the azimuth direction.
+
+The code calculates the components of the incident field parallel and perpendicular to the *local* plane of incidence for each face and applies the corresponding reflection coefficients ($R_v$ and $R_h$) to get the reflected field from that face.
+
+### 2.4 Radar Cross Section (RCS) Calculation
+
+The monostatic Radar Cross Section ($\sigma$) is defined as:
+
+$\sigma = 4 \pi R^2 \frac{|\vec{E}_s|^2}{|\vec{E}_i|^2}$
+
+In the code, the incident field magnitude $|\vec{E}_i|$ is effectively normalized, so the calculation simplifies to:
+
+$\sigma = 4 \pi |\vec{E}_{s, total}|^2$
+
+The RCS is then converted to decibels relative to a square meter (dBsm):
+
+$\sigma_{dBsm} = 10 \log_{10}(\sigma / 1 m^2)$
+
+A small value ($1e-12$) is added before taking the logarithm to avoid $\log(0)$ issues if $|\vec{E}_s|^2$ is exactly zero, ensuring finite dBsm values.
+
+### 2.5 Data Sanitization (FAILSAFE)
+
+As a final step, the code replaces any remaining `NaN` or `Inf` values in the calculated `rcs_db` array with a very low number (-120 dBsm). While the normal incidence fix addresses the primary source of `NaN`s in PO, this extra layer ensures that if any other numerical issue or edge case were to produce non-finite values, they don't break subsequent calculations like averaging, guaranteeing valid output metrics.
+
+## 3. Limitations of the PO/MEC Approach
+
+It is crucial to understand that PO and MEC are high-frequency approximations. They have significant limitations when applied outside their region of validity:
+
+*   **Low Frequency:** These methods are invalid when the object's features are not electrically large (i.e., dimensions are comparable to or smaller than the wavelength, $kL \lesssim 1$). They do not capture resonance effects.
+*   **Multiple Bounce:** PO and basic MEC typically only account for the first interaction (single bounce) of the radar wave with the object's surfaces and edges. They generally ignore contributions from waves that bounce off one surface and then another, or off a surface and then an edge, etc. This can lead to significant errors in complex structures like cavities or inlets.
+*   **Creeping Waves/Surface Waves:** Phenomena where currents propagate along curved surfaces or edges into the shadow region are not included.
+*   **Blocked Edges/Surfaces:** Simplified MEC/PO implementations may not correctly account for edges or surfaces that are blocked from the line-of-sight by other parts of the geometry.
+*   **Complex Materials:** The material model is simplified (surface impedance). More complex material properties (volume scattering, layered structures) are not supported.
+*   **Accuracy near Shadow Boundaries:** PO currents are discontinuous at shadow boundaries, which is physically incorrect. MEC helps correct for the *far-field* effect of this discontinuity from edges, but the surface current approximation itself remains simplified.
+
+## 4. Conclusion
+
+The hybrid PO/MEC approach implemented in this tool provides a powerful and computationally efficient method for estimating the RCS of electrically large structures. By combining surface scattering (PO) with edge diffraction (MEC), it captures key physical mechanisms contributing to RCS. The inclusion of robustness fixes (NaN handling, data sanitization) and support for material properties and polarization make it a practical engineering tool for preliminary RCS analysis, signature prediction, and understanding the impact of geometry on scattering. Its limitations highlight the necessity for more complex methods (like SRA, MOM, FEM, or hybrid techniques) when higher accuracy or analysis outside the high-frequency regime is required.

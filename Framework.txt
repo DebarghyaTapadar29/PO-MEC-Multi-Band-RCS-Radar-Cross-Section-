@@ -1,0 +1,81 @@
+## Project Overview
+
+This project provides a comprehensive MATLAB tool for analyzing the Radar Cross Section (RCS) of arbitrary 3D models defined by STL files. It uses a combination of the **Physical Optics (PO)** method and an optional **Method of Edge Currents (MEC)** to efficiently estimate the electromagnetic scattering signature across user-defined radar frequency bands and viewing angles.
+
+This tool is particularly useful for:
+
+*   Rapid assessment of RCS characteristics during preliminary design phases.
+*   Identifying dominant scattering features (like specular reflections and edge diffraction).
+*   Comparing the RCS performance of different geometries or material treatments.
+*   Educational purposes in computational electromagnetics and radar signature analysis.
+
+The script handles geometry import and preprocessing, runs the simulation sweep across chosen parameters, calculates RCS values, performs robustness checks, and generates detailed text reports and visualizations (polar plots, cartesian plots, heatmaps).
+
+## Getting Started
+
+### Prerequisites
+
+To run this code, you will need:
+
+1.  **MATLAB:** A recent version (e.g., R2015b or newer) is recommended.
+2.  **`stlread.m` Function:** This is a common third-party function required to import STL files into MATLAB. You can typically find it with a quick search online (e.g., on MathWorks File Exchange). Ensure this function file is in the same directory as the project scripts or in your MATLAB path.
+3.  **Project Code:** Download or clone all the MATLAB script (`.m`) files from this repository. The main script is `run_RCS_Analysis_Final.m`.
+4.  **An STL File:** You need a 3D geometry file in the ASCII or Binary STL format (`.stl`). An example file (`Your Stl File.stl` mentioned in the code) might be included, but you should replace it with the path to your geometry file.
+
+### File Structure
+
+The repository should contain the following key files:
+
+*   `run_RCS_Analysis_Final.m`: The main script that sets up parameters, orchestrates the simulation sweep, and generates reports/visualizations. **Run this file to start the analysis.**
+*   `calculate_po_sweep_vec.m`: Helper function implementing the Physical Optics calculations.
+*   `calculate_mec_sweep_vec.m`: Helper function implementing the Method of Edge Currents calculations.
+*   `create_simplified_heatmap.m`: Function to generate the heatmap visualization.
+*   `create_2d_plots.m`: Function to generate the polar and cartesian RCS plots.
+*   (Optional) `PHYSICS_STUDY.md` or `PHYSICS_STUDY.txt`: Detailed explanation of the physics models used.
+*   (Optional) `Your Stl File.stl`: An example STL file.
+*   (Optional) `LICENSE`: The project's license file (e.g., MIT).
+*   `README.md` (This file): Project overview and usage instructions.
+
+**Recommendation:** Place all `.m` files and your chosen `.stl` file in the same directory for simplicity.
+
+## How to Use
+
+Follow these steps to run an RCS analysis:
+
+1.  **Download or Clone:** Get all the project files from the repository and place them in a directory on your computer.
+2.  **Obtain `stlread.m`:** If you don't already have it, download `stlread.m` and place it in the same directory.
+3.  **Add Your STL File:** Place the STL file of the geometry you want to analyze in the same directory.
+4.  **Open MATLAB:** Launch MATLAB and navigate to the directory where you placed the project files.
+5.  **Configure Simulation:** Open the `run_RCS_Analysis_Final.m` script in the MATLAB editor. Go to the `%% =================== 1. USER CONFIGURATION PANEL =====================` section.
+    *   Modify `stl_file` to the filename of your geometry (e.g., `'my_target.stl'`).
+    *   Set `scale_factor` according to your STL file's units (e.g., `0.001` for mm, `1.0` for meters).
+    *   Choose `polarization` ('VV' or 'HH').
+    *   Set `enable_MEC` to `true` or `false` to include or exclude edge diffraction effects. `mec_scaling_factor` can be adjusted if MEC is enabled.
+    *   Define `eta_ram` for the material properties (e.g., `0` for PEC, `0.43 + 0.13i` for a simple RAM model).
+    *   Define the radar bands by modifying the `bands` structure array (`name`, `freq`). Add or remove bands as needed.
+    *   Specify the `azimuth_angles_deg` range (e.g., `0:1:359` for a full 360 sweep) and the `elevation_angle_deg` (e.g., `0` for horizontal plane analysis).
+6.  **Run the Script:** Execute the `run_RCS_Analysis_Final.m` script. You can do this by clicking the "Run" button in the MATLAB editor or typing `run_RCS_Analysis_Final` in the MATLAB Command Window and pressing Enter.
+7.  **Monitor Progress:** The script will display a waitbar and print progress updates to the Command Window as it runs the multi-band sweep.
+8.  **View Results:** Once the simulation is complete:
+    *   A detailed text report summarizing the average, peak, frontal, side, and rear RCS values per band will be printed in the MATLAB Command Window.
+    *   MATLAB figures will be generated showing:
+        *   An RCS heatmap visualizing RCS vs. Azimuth and Frequency Band.
+        *   A polar plot of the RCS signature for each band.
+        *   A cartesian plot of RCS vs. Azimuth for each band.
+
+## STL File Orientation
+
+**Correct STL file orientation is essential for meaningful results.** The azimuth sweep is typically performed in the XY plane at a fixed elevation angle relative to this plane (often elevation=0, meaning incidence vectors are in the XY plane). The code assumes:
+
+*   **Azimuth Rotation:** Occurs around the **Z-axis**. Azimuth 0 degrees is typically aligned with the **positive X-axis**, rotating towards the positive Y-axis (counter-clockwise from +X to +Y, or clockwise depending on plotting conventions, but consistent relative to the model's body axis). The polar plots in the code use a clockwise convention from the top (0 degrees).
+*   **Elevation Angle:** Defined relative to the XY plane. Elevation 0 means the incident direction is in the XY plane. A positive elevation angle means the incident direction is lifted *above* the XY plane towards the +Z axis.
+
+Ensure your STL model is oriented such that its intended "front" corresponds to the +X direction, its wings/span are along the Y-axis, and its top is towards the +Z axis.
+
+## Understanding the Physics Models
+
+For a detailed explanation of the underlying electromagnetic scattering models and their assumptions (Physical Optics, Method of Edge Currents, Material Models), including their limitations, please refer to the `PHYSICS_STUDY.md` (or `.txt`) file in this repository. This document is crucial for interpreting the results and understanding the tool's capabilities and when more advanced methods might be needed.
+
+## License
+
+This project is open-source and distributed under the [Specify Your License, e.g., MIT License]. See the `LICENSE` file for details.
